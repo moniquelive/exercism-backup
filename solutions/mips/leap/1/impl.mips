@@ -1,0 +1,58 @@
+## Registers
+
+# | Register | Usage     | Type    | Description                                      |
+# | -------- | --------- | ------- | ------------------------------------------------ |
+# | `$a0`    | input     | integer | year to check                                    |
+# | `$v0`    | output    | boolean | input is leap year (`0` = `false`, `1` = `true`) |
+# | `$t0-9`  | temporary | any     | used for temporary storage                       |
+
+.globl is_leap_year
+
+.data
+    TrueValue: .word 1
+    FalseValue: .word 0
+
+.text
+is_leap_year:
+    # Saving context
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    
+    # Load year from the argument into $t0
+    move $t0, $a0  # $t0 = year
+
+    # divisible_by 4
+    li $t1, 4
+    div $t0, $t1
+    mfhi $t2  # Move the remainder to $t2
+    bnez $t2, false_case
+
+    # divisible_by 100
+check_100:
+    li $t1, 100
+    div $t0, $t1
+    mfhi $t2  # Move the remainder to $t2
+    bnez $t2, true_case
+
+    # divisible_by 400
+check_400:
+    li $t1, 400
+    div $t0, $t1
+    mfhi $t2  # Move the remainder to $t2
+    bnez $t2, false_case
+
+true_case:
+    la $v0, TrueValue
+    lw $v0, 0($v0)
+    b end_leap_year
+
+false_case:
+    la $v0, FalseValue
+    lw $v0, 0($v0)
+
+end_leap_year:
+    # Restoring context
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    
+    jr $ra  # Return
