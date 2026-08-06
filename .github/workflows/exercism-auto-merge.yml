@@ -1,0 +1,139 @@
+name: Exercism auto-merge
+
+on:
+  workflow_dispatch:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: exercism-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge eligible pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            mapfile -t pr_numbers < <(
+              gh api --paginate "repos/$GH_REPO/pulls?state=open&sort=created&direction=asc&per_page=100" \
+                --jq '.[].number' | sort -n
+            )
+          else
+            pr_numbers=("$EVENT_PR_NUMBER")
+          fi
+
+          merged_count=0
+          skipped=()
+
+          for number in "${pr_numbers[@]}"; do
+            pr_json="$(gh api "repos/$GH_REPO/pulls/$number")"
+            author="$(jq -r '.user.login' <<<"$pr_json")"
+            title="$(jq -r '.title' <<<"$pr_json")"
+            draft="$(jq -r '.draft' <<<"$pr_json")"
+            state="$(jq -r '.state' <<<"$pr_json")"
+
+            if [[ "$state" != "open" ]]; then
+              skipped+=("#$number: no longer open")
+              continue
+            fi
+
+            if [[ "$author" != "exercism-solutions-syncer[bot]" ]]; then
+              skipped+=("#$number: author is $author")
+              continue
+            fi
+
+            if [[ "$title" != "[Sync Iteration]"* ]]; then
+              skipped+=("#$number: title does not start with [Sync Iteration]")
+              continue
+            fi
+
+            if [[ "$draft" == "true" ]]; then
+              skipped+=("#$number: draft")
+              continue
+            fi
+
+            mergeable="$(jq -r '.mergeable' <<<"$pr_json")"
+
+            # GitHub may briefly report mergeability as unknown after a PR update.
+            for attempt in {1..6}; do
+              if [[ "$mergeable" != "null" ]]; then
+                break
+              fi
+
+              sleep 10
+              pr_json="$(gh api "repos/$GH_REPO/pulls/$number")"
+              mergeable="$(jq -r '.mergeable' <<<"$pr_json")"
+            done
+
+            if [[ "$mergeable" != "true" ]]; then
+              skipped+=("#$number: not mergeable (mergeable=$mergeable)")
+              continue
+            fi
+
+            if ! merge_json="$(
+              gh api --method PUT "repos/$GH_REPO/pulls/$number/merge" \
+                --raw-field merge_method=merge 2>&1
+            )"; then
+              skipped+=("#$number: merge request failed: $merge_json")
+              continue
+            fi
+
+            if [[ "$(jq -r '.merged' <<<"$merge_json")" != "true" ]]; then
+              message="$(jq -r '.message // "merge rejected"' <<<"$merge_json")"
+              skipped+=("#$number: $message")
+              continue
+            fi
+
+            merged_count=$((merged_count + 1))
+            echo "Merged #$number with a merge commit."
+
+            head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$pr_json")"
+            head_ref="$(jq -r '.head.ref' <<<"$pr_json")"
+            base_ref="$(jq -r '.base.ref' <<<"$pr_json")"
+
+            if [[ "$head_repo" == "$GH_REPO" && "$head_ref" != "$base_ref" ]]; then
+              if gh api --method DELETE "repos/$GH_REPO/git/refs/heads/$head_ref"; then
+                echo "Deleted remote branch $head_ref."
+              else
+                echo "Could not delete remote branch $head_ref; merge remains complete."
+              fi
+            else
+              echo "Remote branch $head_ref is not deletable by this workflow."
+            fi
+          done
+
+          {
+            echo "## Exercism auto-merge"
+            echo
+            echo "Merged pull requests: $merged_count"
+
+            if ((${#skipped[@]} > 0)); then
+              echo
+              echo "### Left open or skipped"
+              printf -- '- %s\n' "${skipped[@]}"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          echo "Merged pull requests: $merged_count"
+
+          if ((${#skipped[@]} > 0)); then
+            printf 'Skipped: %s\n' "${skipped[@]}"
+          fi
