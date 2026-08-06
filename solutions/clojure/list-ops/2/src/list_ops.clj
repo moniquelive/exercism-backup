@@ -1,0 +1,10 @@
+(ns list-ops)
+
+(def append concat)
+(def concatenate (partial apply concat))
+(def select-if filter)
+(def length count)
+(def apply-to-each map)
+(def foldl #(reduce %1 %3 %2))
+(def foldr #(reduce %1 %3 (reverse %2)))
+(def reverse-order reverse)
