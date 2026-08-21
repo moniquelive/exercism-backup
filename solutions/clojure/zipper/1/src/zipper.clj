@@ -1,0 +1,16 @@
+(ns zipper)
+
+(defn- focused-node-path [zipper] (into [:tree] (:path zipper)))
+(defn- focused-node [zipper] (get-in zipper (focused-node-path zipper)))
+(defn- move-down [zipper direction] (when (direction (focused-node zipper)) (update zipper :path conj direction)))
+(defn- set-focused-field [zipper field new-value] (update-in zipper (focused-node-path zipper) assoc field new-value))
+
+(defn from-tree [tree] {:tree tree :path []})
+(defn value [zipper] (:value (focused-node zipper)))
+(defn left [zipper] (move-down zipper :left))
+(defn right [zipper] (move-down zipper :right))
+(defn to-tree [{:keys [tree]}] tree)
+(defn up [zipper] (when (seq (:path zipper)) (update zipper :path pop)))
+(defn set-value [zipper new-value] (set-focused-field zipper :value new-value))
+(defn set-left [zipper subtree] (set-focused-field zipper :left subtree))
+(defn set-right [zipper subtree] (set-focused-field zipper :right subtree))
